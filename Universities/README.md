@@ -8,3 +8,6 @@ To address this:
 
 The result: Students can showcase their idiosyncratic traits more effectively, leading to higher success rates in university applications.
 This approach is leading to : more efficiency in the department, higher information value given to parents and students, and sharper letters, we will see the quantified results at the school year end.
+
+To go further : 
+![University Decision tree](student_application_tree.png)
