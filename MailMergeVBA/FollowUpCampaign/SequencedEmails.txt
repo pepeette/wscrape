@@ -1,0 +1,442 @@
+Option Explicit
+
+' *** Main subroutine to send staged funnel emails ***
+
+Public Sub SendStagedFunnelEmails()
+    On Error GoTo ErrorHandler
+    
+    Dim wb As Workbook
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    Dim i As Long
+    Dim j As Integer
+    Dim OutlookApp As Object
+    Dim todayDate As Date
+    Dim sentStatusCol As Integer
+    Dim replyStatusCol As Integer
+    
+    ' Set references
+    Set wb = ThisWorkbook
+    Set ws = wb.ActiveSheet
+    lastRow = ws.Cells(ws.Rows.Count, "A").End(xlUp).Row
+    
+    ' Identify Sent Status and Reply Satus cols using exact header names
+    sentStatusCol = GetColumnIndex("Sent Status", ws)
+    replyStatusCol = GetColumnIndex("Reply Status", ws)
+    
+    ' Check if required columns are found
+    If sentStatusCol = -1 Or replyStatusCol = -1 Then
+        MsgBox "Required columns not found...", vbCritical
+        Exit Sub
+    End If
+    
+    ' Ensure New Outlook is running
+    Shell "outlook.exe /select outlook:inbox", vbNormalFocus
+    Application.Wait Now + TimeValue("00:00:03") ' Wait for Outlook to open
+    
+    ' Create Outlook instance for new Outlook
+    Set OutlookApp = CreateObject("Outlook.Application")
+    
+    ' Get today's date
+    todayDate = Date
+    
+    '' Loop through each row in the spreadsheet
+    'For i = 3 To lastRow ' Assuming header is in row 1
+    '    ' Check each email date column (Email1 Date to Email6 Date)
+    '    CheckAndSendEmail 1, i, ws, outlookApp, todayDate
+    '    CheckAndSendEmail 2, i, ws, outlookApp, todayDate
+    '    CheckAndSendEmail 3, i, ws, outlookApp, todayDate
+    '    CheckAndSendEmail 4, i, ws, outlookApp, todayDate
+    '    CheckAndSendEmail 5, i, ws, outlookApp, todayDate
+    '    CheckAndSendEmail 6, i, ws, outlookApp, todayDate
+
+    '    ' Update Sent Status for Logging
+    '    UpdateSentStatus i, ws
+    'Next i
+    
+    ' Loop through each row in the spreadsheet starting from row 3
+    For i = 3 To lastRow
+        ' Check Reply Status before proceeding
+        If Trim(UCase(Nz(ws.Cells(i, replyStatusCol).value, ""))) <> "Replied" Then
+            ' Check and send emails in sequence
+            For j = 1 To 6
+                CheckAndSendEmail j, i, ws, OutlookApp, todayDate, sentStatusCol, replyStatusCol
+            Next j
+        End If
+    Next i
+        
+    ' Clean up
+    Set OutlookApp = Nothing
+    MsgBox "Scheduled emails have been processed!", vbInformation
+    Exit Sub
+
+ErrorHandler:
+    MsgBox "An error occurred: " & Err.Description, vbCritical
+    Debug.Print "Error " & Err.Number & ": " & Err.Description & " in row " & i & ", email " & j
+    Resume Next
+End Sub
+
+' *** Subroutine to check conditions and send email ***
+
+Private Sub CheckAndSendEmail(emailNumber As Integer, rowIndex As Long, ws As Worksheet, OutlookApp As Object, todayDate As Date, sentStatusCol As Integer, replyStatusCol As Integer)
+    Dim emailDate As Date
+    Dim cellValue As Variant
+    Dim sentStatus As String
+    Dim sentStatusValue As String
+    Dim lastSentEmailNumber As Integer
+    Dim lastSentEmailDate As Date
+    Dim regex As Object
+    Dim matches As Object
+    Dim m As Object ' declare loop variable for regex matches
+        
+    ' Check Reply Status before proceeding
+    If Trim(UCase(Nz(ws.Cells(rowIndex, replyStatusCol).value, ""))) = "Replied" Then
+        Exit Sub ' Skip sending emails if replied
+    End If
+    
+    ' Ensure all prior emails have been sent
+    If emailNumber > 1 Then
+        Dim priorEmail As String
+        priorEmail = "Email" & (emailNumber - 1) & " sent"
+        If InStr(Trim(Nz(ws.Cells(rowIndex, sentStatusCol).value, "")), priorEmail) = 0 Then
+            Exit Sub ' Prior email not sent yet
+        End If
+    End If
+    
+    ' Additional Check: If sentStatusCol indicates "In Progress - EmailX sent on [date]" and date <= today, do not resend
+    sentStatusValue = Trim(Nz(ws.Cells(rowIndex, sentStatusCol).value, ""))
+    
+    If sentStatusValue <> "" Then
+        ' Use regex to find the highest EmailX sent and check the date
+        Set regex = CreateObject("VBScript.RegExp")
+        regex.Pattern = "In Progress\s*-\s*Email(\d+)\s*sent on\s*(\d{2}/\d{2}/\d{4})"
+        regex.IgnoreCase = True
+        regex.Global = False
+        
+        If regex.Test(sentStatusValue) Then
+            Set matches = regex.Execute(sentStatusValue)
+            If matches.Count > 0 Then
+                lastSentEmailNumber = CInt(matches(0).SubMatches(0))
+                If IsDate(matches(0).SubMatches(1)) Then
+                    lastSentEmailDate = CDate(matches(0).SubMatches(1))
+                    ' If last sent emailNumber is >= current emailNumber and date <= today, do not resend
+                    If lastSentEmailNumber >= emailNumber And lastSentEmailDate <= todayDate Then
+                        Exit Sub ' Do not resend
+                    End If
+                End If
+            End If
+        End If
+    End If
+    
+    ' Get the date from the appropriate column with error handling
+    cellValue = ws.Cells(rowIndex, GetEmailDateColumn(emailNumber)).value
+    
+    ' Check if the cell contains a valid date
+    If IsDate(cellValue) Then
+        emailDate = CDate(cellValue)
+        sentStatus = Trim(Nz(ws.Cells(rowIndex, sentStatusCol).value, ""))
+        
+        ' Check if email should be sent today and hasn't been sent yet
+        If DateValue(emailDate) = DateValue(todayDate) And InStr(sentStatus, "Email" & emailNumber & " sent") = 0 Then
+            ' Create and send the email
+            SendEmail emailNumber, rowIndex, ws, OutlookApp
+            
+            ' Update sent status
+            If sentStatus = "" Then
+                ws.Cells(rowIndex, sentStatusCol).value = "In Progress - Email" & emailNumber & " sent on" & Format(todayDate, "dd/mm/yyyy")
+            Else
+                ws.Cells(rowIndex, sentStatusCol).value = sentStatus & ", Email" & emailNumber & " sent on" & Format(todayDate, "dd/mm/yyyy")
+            End If
+        End If
+    End If
+End Sub
+
+' *** Subroutine to update sent status ***
+Private Sub UpdateSentStatus(rowIndex As Long, ws As Worksheet)
+    Dim replyStatus As String
+    Dim sentStatus As String
+    Dim lastSentEmailNumber As Integer
+    Dim lastSentEmailDate As Date
+    Dim sentStatusValue As String
+    Dim emailNumber As Integer
+    Dim emailDate As Date
+    Dim regex As Object
+    Dim matches As Object
+    Dim m As Object 'Declare loop variable for regex matches
+    
+    ' Get Reply Status from column N (14)
+    replyStatus = Trim(Nz(ws.Cells(rowIndex, 14).value, ""))
+    
+    ' Check if the contact has replied
+    If replyStatus = "" Then
+        ' If no reply, find the highest EmailX sent
+        ' Parse sentStatusCol (Column M, 13) for "EmailX sent"
+        sentStatusValue = Trim(Nz(ws.Cells(rowIndex, 13).value, ""))
+        
+        lastSentEmailNumber = 0
+        lastSentEmailDate = 0
+        
+        If sentStatusValue <> "" Then
+            ' Use regex to find all "EmailX sent" occurrences
+            Set regex = CreateObject("VBScript.RegExp")
+            regex.Pattern = "Email(\d+)\s*sent on\s*(\d{2}/\d{2}/\d{4})"
+            regex.IgnoreCase = True
+            regex.Global = True
+            
+            If regex.Test(sentStatusValue) Then
+                Set matches = regex.Execute(sentStatusValue)
+                For Each m In matches
+                    emailNumber = CInt(m.SubMatches(0))
+                    If emailNumber > lastSentEmailNumber Then
+                        lastSentEmailNumber = emailNumber
+                        If IsDate(m.SubMatches(1)) Then
+                            lastSentEmailDate = CDate(m.SubMatches(1))
+                        End If
+                    End If
+                Next m
+            End If
+        End If
+        
+        ' If emails have been sent, format sentStatus with last sent email info
+        If lastSentEmailNumber > 0 Then
+            sentStatus = "In Progress - Email" & lastSentEmailNumber & " sent on " & Format(lastSentEmailDate, "dd/mm/yyyy")
+        Else
+            sentStatus = "In Progress"
+        End If
+
+        '
+        
+        '    ' Get EmailX Date from column GetEmailDateColumn(lastSentEmailNumber)
+        '    Dim emailDateCol As Integer
+        '    emailDateCol = GetEmailDateColumn(lastSentEmailNumber)
+        '    emailDate = ws.Cells(rowIndex, emailDateCol).value
+        '    If IsDate(emailDate) Then
+        '        lastSentEmailDate = CDate(emailDate)
+        '    End If
+        '    sentStatus = "In Progress - Email" & lastSentEmailNumber & " sent on " & Format(lastSentEmailDate, "dd/mm/yyyy")
+        'Else
+        '    sentStatus = "In Progress"
+        'End If
+    Else
+        ' If replied, set status to "Replied" along with the response date (column O, 15)
+        If IsDate(ws.Cells(rowIndex, 15).value) Then
+            sentStatus = "Replied - " & Format(ws.Cells(rowIndex, 15).value, "dd/mm/yyyy")
+        Else
+            sentStatus = "Replied"
+        End If
+    End If
+    
+    ' Update Sent Status for Logging (Column M)
+    ws.Cells(rowIndex, 13).value = sentStatus
+End Sub
+
+' *** Function to get col index based on header name ***
+Private Function GetColumnIndex(headerName As String, ws As Worksheet) As Integer
+    Dim cell As Range
+    Dim found As Boolean
+    Dim lastCol As Long
+    Dim c As Long
+    found = False
+    
+    ' Determine last use col in row 2
+    lastCol = ws.Cells(2, ws.Columns.Count).End(xlToLeft).Column
+    
+    For Each cell In ws.Rows(2).Cells ' Headers are in row 2
+        If Trim(UCase(cell.value)) = Trim(UCase(headerName)) Then
+            GetColumnIndex = cell.Column
+            found = True
+            Exit Function
+        End If
+    Next cell
+    
+    If Not found Then
+        ' Debugging: Print all header names to the Immediate Window
+        Debug.Print "Headers found in Row 2:"
+        For Each cell In ws.Rows(2).Cells
+            If Trim(cell.value) <> "" Then
+                Debug.Print Trim(cell.value)
+            End If
+        Next cell
+        GetColumnIndex = -1 ' Not found
+    End If
+End Function
+
+' *** Function to get email date column ***
+
+Private Function GetEmailDateColumn(emailNumber As Integer) As Integer
+    ' Updated email date columns (G to L)
+    Select Case emailNumber
+        Case 1
+            GetEmailDateColumn = 7  ' Column G for Email1 Date
+        Case 2
+            GetEmailDateColumn = 8  ' Column H for Email2 Date
+        Case 3
+            GetEmailDateColumn = 9  ' Column I for Email3 Date
+        Case 4
+            GetEmailDateColumn = 10 ' Column J for Email4 Date
+        Case 5
+            GetEmailDateColumn = 11 ' Column K for Email5 Date
+        Case 6
+            GetEmailDateColumn = 12 ' Column L for Email6 Date
+        Case Else
+            GetEmailDateColumn = 7  ' Default to first email date column
+    End Select
+End Function
+
+' *** Function to replicate excel Nz Function ***
+
+Private Function Nz(value As Variant, Optional defaultValue As Variant = "") As Variant
+    If IsNull(value) Or IsEmpty(value) Then
+        Nz = defaultValue
+    Else
+        Nz = value
+    End If
+End Function
+
+' *** Subroutine to create and sen emails ***
+
+Private Sub SendEmail(emailNumber As Integer, rowIndex As Long, ws As Worksheet, OutlookApp As Object)
+    Dim mailItem As Object
+    Dim emailBody As String
+    Dim emailSubject As String
+    Dim signature As String
+    
+    ' Create new mail item
+    Set mailItem = OutlookApp.CreateItem(0) ' 0 = olMailItem
+    
+    ' Get email template based on email number
+    Select Case emailNumber
+        Case 1
+            emailSubject = Replace("[First Name], Ready to Make Your Outdoor Space Unforgettable?", "[First Name]", ws.Cells(rowIndex, "B").value)
+            emailBody = GetEmail1Template(ws, rowIndex)
+        Case 2
+            emailSubject = "Quality Furniture for Busy Outdoor Spaces"
+            emailBody = GetEmail2Template(ws, rowIndex)
+        Case 3
+            emailSubject = "Trusted by Leading Designers & Architects"
+            emailBody = GetEmail3Template(ws, rowIndex)
+        Case 4
+            emailSubject = "Keep Your Outdoor Spaces on Trend"
+            emailBody = GetEmail4Template(ws, rowIndex)
+        Case 5
+            emailSubject = "Quality Furniture for Better Guest Experiences"
+            emailBody = GetEmail5Template(ws, rowIndex)
+        Case 6
+            emailSubject = "Your Outdoor Spaces Deserve the Best – Let's Talk"
+            emailBody = GetEmail6Template(ws, rowIndex)
+    End Select
+    
+    ' Format email body as HTML
+    emailBody = "<html><body style='font-family: Calibri, Arial, sans-serif;'>" & _
+                Replace(emailBody, vbCrLf, "<br>") & _
+                "</body></html>"
+    
+    With mailItem
+        .To = ws.Cells(rowIndex, "C").value
+        .Subject = emailSubject
+        .Display
+        ' Capture the existing signature
+        signature = .HTMLBody
+        ' Combine the message with the signature
+        .HTMLBody = "<html><body style='font-family: Calibri, Arial, sans-serif;'>" & Replace(emailBody, vbCrLf, "<br>") & "<br><br>" & signature & "</body></html>"
+        ' .HTMLBody = emailBody & .HTMLBody ' This appends the default signature
+        ' Let Outlook handle the signature
+        .Display
+        DoEvents
+        Application.Wait Now + TimeValue("00:00:01")
+        .Send
+    End With
+    
+    ' Wait a bit between sends to avoid overwhelming Outlook
+    Application.Wait Now + TimeValue("00:00:02")
+End Sub
+
+' *** Email template functions ***
+
+Private Function GetEmail1Template(ws As Worksheet, rowIndex As Long) As String
+    Dim template As String
+    template = "Hi [First Name]," & vbCrLf & vbCrLf & _
+              "Imagine your guests stepping into an outdoor space that's as inviting as it is memorable. &#127807;" & vbCrLf & vbCrLf & _
+              "Our recent work on [Project] shows how the right, durable furniture can transform spaces and elevate the guest experience." & vbCrLf & vbCrLf & _
+              "At Suniture, we're proud to partner with top hotels to create outdoor areas that leave a lasting impression. With quality and style built for busy spaces, our furniture keeps outdoor areas beautiful and easy to maintain. &#9728;" & vbCrLf & vbCrLf & _
+              "I'd love to share ideas on how we can bring the same impact to your space. Let me know if you'd like a brochure or a quick chat!" & vbCrLf & vbCrLf & _
+              "Best,"
+    
+    template = Replace(template, "[First Name]", ws.Cells(rowIndex, "B").value)
+    template = Replace(template, "[Project]", ws.Cells(rowIndex, "D").value)
+    
+    GetEmail1Template = template
+End Function
+
+
+Private Function GetEmail2Template(ws As Worksheet, rowIndex As Long) As String
+    Dim template As String
+    template = "Hi [First Name]," & vbCrLf & vbCrLf & _
+              "Many hotels focus on giving guests a great experience but end up replacing outdoor furniture often. Imagine investing in pieces that stay beautiful, year after year. &#9986;" & vbCrLf & vbCrLf & _
+              "With your previous purchase with us, we created a setup that still looks great, despite heavy use. With Suniture, you get furniture that keeps high-traffic areas guest-ready without extra maintenance. Plus, it's made to last through all kinds of weather, so you can save on replacements. &#128170;&#127787;" & vbCrLf & vbCrLf & _
+              "Would you like to see options for your space?" & vbCrLf & vbCrLf & _
+              "Looking forward,"
+    
+    template = Replace(template, "[First Name]", ws.Cells(rowIndex, "B").value)
+    GetEmail2Template = template
+End Function
+
+Private Function GetEmail3Template(ws As Worksheet, rowIndex As Long) As String
+    Dim template As String
+    template = "Hi [First Name]," & vbCrLf & vbCrLf & _
+              "Leading designers and architects trust Suniture for their projects because our furniture combines style with strength. For example, at [Project], our pieces were chosen to create a beautiful outdoor area that still looks fresh and welcoming. &#127965;" & vbCrLf & vbCrLf & _
+              "Our furniture works well in busy spaces, withstanding both the weather and heavy guest use, all while looking great. &#9728;" & vbCrLf & vbCrLf & _
+              "Let's set up a time to discuss how we can meet your outdoor furniture needs with the same quality trusted by design experts. We'd love to help you create outdoor spaces that stay inviting and impressive. &#11088;" & vbCrLf & vbCrLf & _
+              "Warm regards,"
+    
+    template = Replace(template, "[First Name]", ws.Cells(rowIndex, "B").value)
+    template = Replace(template, "[Project]", ws.Cells(rowIndex, "D").value)
+    GetEmail3Template = template
+End Function
+
+Private Function GetEmail4Template(ws As Worksheet, rowIndex As Long) As String
+    Dim template As String
+    template = "Hi [First Name]," & vbCrLf & vbCrLf & _
+              "We know Suniture's furniture is made to last—that's why you haven't needed us for replacements! &#128521;" & vbCrLf & vbCrLf & _
+              "But outdoor design trends are always changing, and we're excited to share that our collections keep up. Our newest styles blend lasting quality with fresh looks to create stunning spaces that match today's hospitality style." & vbCrLf & vbCrLf & _
+              "Recently, our pieces were featured in some of the most beautiful hospitality photos worldwide. &#128247;" & vbCrLf & vbCrLf & _
+              "Imagine these designs enhancing your brand's outdoor spaces, keeping them current and unforgettable. Want a sneak peek? &#128064;" & vbCrLf & vbCrLf & _
+              "Let's explore how we can bring a fresh look to your outdoor spaces." & vbCrLf & vbCrLf & _
+              "Best,"
+    
+    template = Replace(template, "[First Name]", ws.Cells(rowIndex, "B").value)
+    GetEmail4Template = template
+End Function
+
+Private Function GetEmail5Template(ws As Worksheet, rowIndex As Long) As String
+    Dim template As String
+    template = "Hi [First Name]," & vbCrLf & vbCrLf & _
+              "When it comes to outdoor furniture, quality makes all the difference. &#128176;" & vbCrLf & vbCrLf & _
+              "Suniture specializes in creating setups that impress guests while standing up to heavy use. Our clients, like [Project], have seen how our pieces keep outdoor spaces welcoming and save money on replacements. &#127807;" & vbCrLf & vbCrLf & _
+              "Imagine having furniture that draws guests in, enhances their experience, and lasts through busy seasons, year after year." & vbCrLf & vbCrLf & _
+              "Would you like to talk about how we can help create outdoor spaces with long-term value? I'd love to schedule a quick consultation." & vbCrLf & vbCrLf & _
+              "Looking forward,"
+    
+    template = Replace(template, "[First Name]", ws.Cells(rowIndex, "B").value)
+    template = Replace(template, "[Project]", ws.Cells(rowIndex, "E").value)
+    GetEmail5Template = template
+End Function
+
+Private Function GetEmail6Template(ws As Worksheet, rowIndex As Long) As String
+    Dim template As String
+    template = "Hi [First Name]," & vbCrLf & vbCrLf & _
+              "We'd love to work with you on your next outdoor project! From [Project], we know how to create beautiful, durable setups that elevate guest experiences. &#9728;" & vbCrLf & vbCrLf & _
+              "Our team is here to help you explore options that fit your specific needs, whether it's creating welcoming lounges, flexible dining areas, or stylish outdoor spaces. &#127796;" & vbCrLf & vbCrLf & _
+              "Ready to bring fresh ideas to your outdoor areas? Reply to this email to start the conversation. We're excited to help make your outdoor space truly stand out! &#11088;" & vbCrLf & vbCrLf & _
+              "Best,"
+    
+    template = Replace(template, "[First Name]", ws.Cells(rowIndex, "B").value)
+    template = Replace(template, "[Project]", ws.Cells(rowIndex, "E").value)
+    GetEmail6Template = template
+End Function
+
+
+
+
+
+
