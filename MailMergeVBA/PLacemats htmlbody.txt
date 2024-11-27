@@ -1,0 +1,105 @@
+PLacemats htmlbody
+
+Option Explicit
+
+Private Declare PtrSafe Function ShellExecute Lib "shell32.dll" Alias "ShellExecuteA" _
+    (ByVal hwnd As LongPtr, ByVal lpOperation As String, _
+    ByVal lpFile As String, ByVal lpParameters As String, _
+    ByVal lpDirectory As String, ByVal nShowCmd As Long) As LongPtr
+
+Sub SendPremiumPlacematEmails()
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    Dim i As Long
+    Dim emailBody As String
+    Dim emailSubject As String
+    
+    ' Set the worksheet
+    Set ws = ThisWorkbook.ActiveSheet
+    
+    ' Find the last row with data
+    lastRow = ws.Cells(ws.Rows.Count, "A").End(xlUp).Row
+    
+    ' Ask user if they want to proceed
+    If MsgBox("This will open the new Outlook and create " & (lastRow - 2) & " emails." & vbNewLine & _
+              "Please ensure you're logged into the new Outlook before proceeding." & vbNewLine & _
+              "Continue?", vbQuestion + vbYesNo) = vbNo Then
+        Exit Sub
+    End If
+    
+    ' Open new Outlook
+    OpenNewOutlook
+    
+    ' Wait for Outlook to open
+    Application.Wait Now + TimeSerial(0, 0, 5)
+    
+    ' Loop through each row
+    For i = 3 To lastRow ' Assuming row 1 has headers
+        ' Construct HTML email body
+        emailBody = "<html><body style='font-family: Arial, sans-serif; line-height: 1.6;'>" & _
+                   "<p>" & ws.Cells(i, 2).Value & ",</p>" & _
+                   "<p>As experts in durable outdoor fabrics, we're bringing that same exceptional standard to our luxurious placemats: <strong>Suniture's Premium Placemats (SPP)</strong>.</p>" & _
+                   "<p>Featuring:" & _
+                   "<ul>" & _
+                   "<li>exceptional stain resistance</li>" & _
+                   "<li>easy maintenance</li>" & _
+                   "<li>customizable designs</li>" & _
+                   "</ul>" & _
+                   "Suniture's Premium Placemats (SPP) are available in a variety of elegant colors, including classic Midnight Black, sophisticated Metallica White, and our popular Sunny Orange...</p>" & _
+                   "<p style='color: #1a73e8;'>&#9650; Upgrade to Suniture's durable, hygienic placemats and elevate your dining experiences at a cost-effective alternative to your current placemats.</p>" & _
+                   "<p>Don't settle for less quality or pay more than you should.</p>" & _
+                   "<p>&#9654; Contact us today to learn how you can get the best for less for your food and beverage space.</p>" & _
+                   "<p><a href='https://www.yourwebsite.com/contact' style='color: #1a73e8; text-decoration: none;'>Click here to inquire now for quick delivery</a></p>" & _
+                   "</body></html>"
+        
+        ' Construct email Subject
+        emailSubject = ws.Cells(i, 1).Value & ": upgrade to Suniture's Premium quality without the premium price."
+                   
+        ' Create new email
+        CreateNewEmail ws.Cells(i, 3).Value, _
+                      emailSubject, _
+                      emailBody
+        
+        ' Wait between emails
+        Application.Wait Now + TimeSerial(0, 0, 2)
+    Next i
+    
+    MsgBox "Process completed! Please check your draft folder in the new Outlook.", vbInformation
+End Sub
+
+Private Sub OpenNewOutlook()
+    Dim result As LongPtr
+    
+    ' Try to open new Outlook using default mail protocol
+    result = ShellExecute(0, "open", "mailto:", "", "", 1)
+    
+    If result <= 32 Then ' Error occurred
+        MsgBox "Could not open new Outlook. Please ensure it's set as your default email client.", vbCritical
+        End
+    Else
+       'Close the draft email that was opened
+        SendKeys "%{F4}", True 'Alt+F4 to close the window
+    End If
+End Sub
+
+Private Sub CreateNewEmail(RecipientEmail As String, emailSubject As String, emailBody As String)
+    Dim OutApp As Object
+    Dim OutMail As Object
+    
+    'Create Outlook application object
+    Set OutApp = CreateObject("Outlook.Application")
+    
+    'Create new mail item
+    Set OutMail = OutApp.CreateItem(0)
+    
+    With OutMail
+        .To = RecipientEmail
+        .Subject = emailSubject
+        .HTMLBody = emailBody
+        .Save 'Save to drafts
+    End With
+    
+    'Clean up
+    Set OutMail = Nothing
+    Set OutApp = Nothing
+End Sub

@@ -1,0 +1,40 @@
+Sub SendHolidayGreetings()
+
+    Dim olApp As Outlook.Application
+    Dim olMail As Outlook.MailItem
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    Dim i As Long
+    Dim emailAddress As String
+
+    ' Set up Outlook application
+    Set olApp = New Outlook.Application
+    Set olMail = olApp.CreateItem(olMailItem)
+
+    ' Set worksheet
+    Set ws = ThisWorkbook.ActiveSheet
+    lastRow = ws.Range("B" & ws.Rows.Count).End(xlUp).Row
+
+    ' Loop through contact list
+    For i = 2 To lastRow
+        emailAddress = Trim(ws.Range("B" & i).Value)
+        If emailAddress <> "" Then
+            With olMail
+                .To = emailAddress
+                .Subject = "Season's Greetings from Suniture"
+                .HTMLBody = "<html><body>" & _
+                            "<img src='C:\Users\kings\Downloads\HolidayGreeting.jpg' alt='Suniture Holiday Greeting'>" & _
+                            "<p>Wishing You a <b>Beautiful Season</b> Ahead<br>and a Prosperous New Year Ahead</p>" & _
+                            "</body></html>"
+                .Send
+            End With
+        End If
+        DoEvents
+    Next i
+
+    MsgBox "Holiday greetings have been sent!"
+
+End Sub
+
+
+
